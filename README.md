@@ -4,6 +4,8 @@
 
 Mac Launcher is a native, macOS-style application launcher built with AppKit. It presents the applications installed on the local Mac in a full-screen interface, with real application icons, fast search, paging animations, and persistent visibility settings.
 
+This project recreates the classic macOS application launcher experience as a modern native implementation.
+
 > **Pinyin search is a highlight feature:** Chinese applications can be found with full pinyin (`beiwanglu`), spaced pinyin (`bei wang lu`), or initials (`bwl`).
 
 ## Screenshot
