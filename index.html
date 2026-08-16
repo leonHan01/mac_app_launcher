@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0a1623" />
+    <title>Launchpad</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="launcher-shell" aria-label="应用启动台">
+      <div class="ambient ambient-one"></div>
+      <div class="ambient ambient-two"></div>
+      <div class="ambient ambient-three"></div>
+
+      <section class="launcher" aria-labelledby="launcher-title">
+        <header class="topbar">
+          <div class="brand">
+            <span class="brand-mark" aria-hidden="true">
+              <i></i><i></i><i></i><i></i>
+            </span>
+            <div>
+              <p class="eyebrow">MY WORKSPACE</p>
+              <h1 id="launcher-title">应用程序</h1>
+            </div>
+          </div>
+
+          <div class="top-actions">
+            <span class="app-count" id="appCount">24 个应用</span>
+            <button class="view-button" id="viewButton" type="button" aria-label="切换显示密度" title="切换显示密度">
+              <span></span><span></span><span></span><span></span>
+            </button>
+          </div>
+        </header>
+
+        <div class="toolbar">
+          <label class="search-box" for="searchInput">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"></circle><path d="m16 16 4.2 4.2"></path></svg>
+            <input id="searchInput" type="search" placeholder="搜索应用" autocomplete="off" />
+            <kbd>⌘ K</kbd>
+          </label>
+
+          <nav class="filters" aria-label="应用分类">
+            <button class="filter is-active" type="button" data-filter="all">全部</button>
+            <button class="filter" type="button" data-filter="work">工作</button>
+            <button class="filter" type="button" data-filter="creative">创作</button>
+            <button class="filter" type="button" data-filter="utility">工具</button>
+          </nav>
+        </div>
+
+        <div class="apps-region" aria-live="polite">
+          <div class="apps-grid" id="appsGrid"></div>
+          <div class="empty-state" id="emptyState" hidden>
+            <div class="empty-icon">⌕</div>
+            <h2>没有找到应用</h2>
+            <p>试试使用其他关键词搜索。</p>
+          </div>
+        </div>
+
+        <footer class="footer">
+          <p><span class="pulse"></span><span id="footerStatus">应用程序已准备就绪</span></p>
+          <p class="shortcut-hint"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> 选择 <span></span><kbd>↵</kbd> 打开</p>
+        </footer>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="./script.js"></script>
+  </body>
+</html>
