@@ -7,7 +7,7 @@ Mac Launcher is a native, macOS-style application launcher built with AppKit. It
 - Discovers applications from `/Applications`, `~/Applications`, and `/System/Applications`.
 - Displays the real icon and display name for each local application.
 - Provides a focused, left-aligned search field with a dark translucent native-style appearance.
-- Filters applications as you type.
+- Filters applications as you type, including Chinese names entered as full pinyin, compact pinyin, or initials.
 - Supports paging with the mouse wheel, trackpad scrolling, page dots, and horizontal slide animations.
 - Uses fade-in and fade-out transitions when opening and dismissing the launcher.
 - Opens an application when its icon is clicked.
@@ -36,7 +36,7 @@ The script validates the launcher lifecycle, compiles the native AppKit applicat
 The output is:
 
 ```text
-build/Mac-Launcher-1.5.5-arm64.dmg
+build/Mac-Launcher-1.5.6-arm64.dmg
 ```
 
 Open the DMG and drag `Mac Launcher.app` to the `Applications` folder. The build is ad-hoc signed and is not notarized with an Apple Developer ID. On another Mac, macOS may ask you to approve the first launch in **System Settings → Privacy & Security**.

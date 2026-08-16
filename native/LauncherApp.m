@@ -1,7 +1,26 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
+#import <CoreFoundation/CoreFoundation.h>
 
 static NSUserInterfaceItemIdentifier const LauncherItemIdentifier = @"LauncherItem";
+
+static NSString *LauncherPinyinIndex(NSString *value) {
+    if (value.length == 0) return @"";
+
+    NSMutableString *latin = [value mutableCopy];
+    CFStringTransform((CFMutableStringRef)latin, NULL, CFSTR("Any-Latin; Latin-ASCII"), false);
+    NSString *normalized = latin.lowercaseString;
+    NSCharacterSet *whitespace = NSCharacterSet.whitespaceAndNewlineCharacterSet;
+    NSArray<NSString *> *syllables = [normalized componentsSeparatedByCharactersInSet:whitespace];
+    NSMutableString *compact = [NSMutableString string];
+    NSMutableString *initials = [NSMutableString string];
+    for (NSString *syllable in syllables) {
+        if (syllable.length == 0) continue;
+        [compact appendString:syllable];
+        [initials appendString:[syllable substringToIndex:1]];
+    }
+    return [NSString stringWithFormat:@"%@ %@ %@", normalized, compact, initials];
+}
 
 @interface LauncherApplication : NSObject
 @property (copy) NSString *name;
@@ -666,7 +685,8 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
                 application.URL = URL;
                 application.name = displayName;
                 NSString *bundleIdentifier = bundle.bundleIdentifier ?: @"";
-                application.searchText = [NSString stringWithFormat:@"%@ %@ %@", displayName, bundleIdentifier, URL.path].lowercaseString;
+                NSString *pinyinIndex = LauncherPinyinIndex(displayName);
+                application.searchText = [NSString stringWithFormat:@"%@ %@ %@ %@", displayName, bundleIdentifier, URL.path, pinyinIndex].lowercaseString;
                 application.icon = [[NSWorkspace.sharedWorkspace iconForFile:URL.path] copy];
                 [applications addObject:application];
             }

@@ -7,7 +7,7 @@ APP_NAME="Mac Launcher"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 CONTENTS_DIR="$APP_BUNDLE/Contents"
 DMG_ROOT="$BUILD_DIR/dmg-root"
-DMG_PATH="$BUILD_DIR/Mac-Launcher-1.5.5-arm64.dmg"
+DMG_PATH="$BUILD_DIR/Mac-Launcher-1.5.6-arm64.dmg"
 ICON_SOURCE="$ROOT_DIR/native/Assets/AppIcon.icns"
 
 rm -rf "$APP_BUNDLE" "$DMG_ROOT"
