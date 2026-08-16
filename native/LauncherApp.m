@@ -24,6 +24,7 @@ static NSString *LauncherPinyinIndex(NSString *value) {
 
 @interface LauncherApplication : NSObject
 @property (copy) NSString *name;
+@property (copy) NSString *bundleIdentifier;
 @property (copy) NSString *searchText;
 @property (strong) NSURL *URL;
 @property (strong) NSImage *icon;
@@ -298,6 +299,7 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
 @property (strong) NSArray<LauncherApplication *> *pageApplications;
 @property (strong) NSArray<LauncherApplication *> *settingsApplications;
 @property (strong) NSMutableSet<NSString *> *hiddenApplicationPaths;
+@property (strong) NSMutableSet<NSString *> *hiddenApplicationBundleIdentifiers;
 @property (strong) NSView *settingsBackdrop;
 @property (strong) NSVisualEffectView *settingsPanel;
 @property (strong) NSSearchField *settingsSearchField;
@@ -314,12 +316,16 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
 @property NSTimeInterval lastPageChange;
 @property BOOL pageTransitionInProgress;
 @property BOOL isDismissing;
+@property NSUInteger launchFeedbackToken;
 @property (strong) id keyMonitor;
 @property (strong) id scrollMonitor;
 @property (strong) id clickMonitor;
 - (void)showPage:(NSInteger)page;
 - (void)showPage:(NSInteger)page animated:(BOOL)animated;
 - (void)showLauncher;
+- (void)showLaunchFailureForApplication:(LauncherApplication *)application;
+- (BOOL)isApplicationHidden:(LauncherApplication *)application;
+- (void)migrateHiddenApplicationPaths;
 @end
 
 @implementation AppDelegate
@@ -327,6 +333,8 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     NSArray<NSString *> *savedHiddenPaths = [NSUserDefaults.standardUserDefaults stringArrayForKey:@"HiddenApplicationPaths"] ?: @[];
     self.hiddenApplicationPaths = [NSMutableSet setWithArray:savedHiddenPaths];
+    NSArray<NSString *> *savedHiddenBundleIdentifiers = [NSUserDefaults.standardUserDefaults stringArrayForKey:@"HiddenApplicationBundleIdentifiers"] ?: @[];
+    self.hiddenApplicationBundleIdentifiers = [NSMutableSet setWithArray:savedHiddenBundleIdentifiers];
     NSScreen *screen = NSScreen.mainScreen ?: NSScreen.screens.firstObject;
     NSRect frame = screen ? screen.frame : NSMakeRect(0, 0, 1440, 900);
     self.window = [[LauncherWindow alloc]
@@ -684,10 +692,8 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
                 LauncherApplication *application = [[LauncherApplication alloc] init];
                 application.URL = URL;
                 application.name = displayName;
-                NSString *bundleIdentifier = bundle.bundleIdentifier ?: @"";
                 NSString *pinyinIndex = LauncherPinyinIndex(displayName);
-                application.searchText = [NSString stringWithFormat:@"%@ %@ %@ %@", displayName, bundleIdentifier, URL.path, pinyinIndex].lowercaseString;
-                application.icon = [[NSWorkspace.sharedWorkspace iconForFile:URL.path] copy];
+                application.searchText = [NSString stringWithFormat:@"%@ %@", displayName, pinyinIndex].lowercaseString;
                 [applications addObject:application];
             }
         }
@@ -697,12 +703,45 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
         dispatch_async(dispatch_get_main_queue(), ^{
             AppDelegate *strongSelf = weakSelf;
             if (strongSelf == nil) return;
+            NSImage *placeholderIcon = [NSImage imageNamed:NSImageNameApplicationIcon];
+            for (LauncherApplication *application in applications) {
+                application.icon = placeholderIcon;
+            }
             strongSelf.allApplications = applications;
             strongSelf.finishedLoading = YES;
             strongSelf.messageLabel.hidden = YES;
             strongSelf.settingsButton.enabled = YES;
             [strongSelf applyLauncherFilter];
         });
+
+        static const NSUInteger LauncherIconBatchSize = 24;
+        for (NSUInteger start = 0; start < applications.count; start += LauncherIconBatchSize) {
+            NSUInteger length = MIN(LauncherIconBatchSize, applications.count - start);
+            NSMutableArray<LauncherApplication *> *batchApplications = [NSMutableArray arrayWithCapacity:length];
+            NSMutableArray *batchIcons = [NSMutableArray arrayWithCapacity:length];
+            for (NSUInteger index = start; index < start + length; index++) {
+                LauncherApplication *application = applications[index];
+                NSImage *icon = [[NSWorkspace.sharedWorkspace iconForFile:application.URL.path] copy];
+                if (icon != nil) {
+                    [icon setSize:NSMakeSize(128.0, 128.0)];
+                }
+                [batchApplications addObject:application];
+                [batchIcons addObject:icon ?: (NSImage *)[NSNull null]];
+            }
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                AppDelegate *strongSelf = weakSelf;
+                if (strongSelf == nil) return;
+                for (NSUInteger index = 0; index < batchApplications.count; index++) {
+                    id icon = batchIcons[index];
+                    if (icon != [NSNull null]) {
+                        batchApplications[index].icon = icon;
+                    }
+                }
+                [strongSelf.collectionView reloadData];
+                [strongSelf.settingsTableView reloadData];
+            });
+        }
     });
 }
 
@@ -826,6 +865,19 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
         return;
     }
     [self applyLauncherFilter];
+}
+
+- (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)commandSelector {
+    BOOL isNewline = commandSelector == @selector(insertNewline:)
+        || commandSelector == @selector(insertLineBreak:);
+    if (control == self.searchField && isNewline) {
+        LauncherApplication *application = self.pageApplications.firstObject;
+        if (application != nil) {
+            [self launchApplication:application];
+        }
+        return YES;
+    }
+    return NO;
 }
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
@@ -990,18 +1042,37 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
 }
 
 - (void)launchApplication:(LauncherApplication *)application {
+    if (application == nil || application.URL == nil) return;
     NSWorkspaceOpenConfiguration *configuration = NSWorkspaceOpenConfiguration.configuration;
     configuration.activates = YES;
+    __weak typeof(self) weakSelf = self;
     [NSWorkspace.sharedWorkspace
         openApplicationAtURL:application.URL
         configuration:configuration
         completionHandler:^(NSRunningApplication *runningApplication, NSError *error) {
-            if (runningApplication != nil && error == nil) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [self dismissLauncher];
-                });
-            }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                AppDelegate *strongSelf = weakSelf;
+                if (strongSelf == nil) return;
+                if (runningApplication != nil && error == nil) {
+                    [strongSelf dismissLauncher];
+                } else {
+                    [strongSelf showLaunchFailureForApplication:application];
+                }
+            });
         }];
+}
+
+- (void)showLaunchFailureForApplication:(LauncherApplication *)application {
+    self.launchFeedbackToken += 1;
+    NSUInteger feedbackToken = self.launchFeedbackToken;
+    self.messageLabel.stringValue = [NSString stringWithFormat:@"无法打开「%@」", application.name];
+    self.messageLabel.hidden = NO;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        AppDelegate *strongSelf = weakSelf;
+        if (strongSelf == nil || strongSelf.launchFeedbackToken != feedbackToken) return;
+        [strongSelf applyLauncherFilter];
+    });
 }
 
 - (void)installInputHandlers {
