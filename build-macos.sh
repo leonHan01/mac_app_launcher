@@ -7,7 +7,8 @@ APP_NAME="Mac Launcher"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 CONTENTS_DIR="$APP_BUNDLE/Contents"
 DMG_ROOT="$BUILD_DIR/dmg-root"
-DMG_PATH="$BUILD_DIR/Mac-Launcher-1.5.6-arm64.dmg"
+VERSION="$(plutil -extract CFBundleShortVersionString raw -o - "$ROOT_DIR/native/Info.plist")"
+DMG_PATH="$BUILD_DIR/Mac-Launcher-$VERSION-arm64.dmg"
 ICON_SOURCE="$ROOT_DIR/native/Assets/AppIcon.icns"
 
 rm -rf "$APP_BUNDLE" "$DMG_ROOT"
@@ -26,7 +27,7 @@ CLANG_MODULE_CACHE_PATH="$BUILD_DIR/module-cache" clang \
 ditto "$ROOT_DIR/native/Info.plist" "$CONTENTS_DIR/Info.plist"
 ditto "$ICON_SOURCE" "$CONTENTS_DIR/Resources/AppIcon.icns"
 plutil -lint "$CONTENTS_DIR/Info.plist"
-codesign --force --deep --sign - "$APP_BUNDLE"
+codesign --force --sign - "$APP_BUNDLE"
 
 ditto "$APP_BUNDLE" "$DMG_ROOT/$APP_NAME.app"
 ln -s /Applications "$DMG_ROOT/Applications"

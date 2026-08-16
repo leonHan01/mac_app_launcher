@@ -28,6 +28,7 @@ static NSString *LauncherPinyinIndex(NSString *value) {
 @property (copy) NSString *searchText;
 @property (strong) NSURL *URL;
 @property (strong) NSImage *icon;
+@property BOOL iconLoaded;
 @end
 
 @implementation LauncherApplication
@@ -42,10 +43,117 @@ static NSString *LauncherPinyinIndex(NSString *value) {
 @end
 
 @interface LauncherWallpaperView : NSView
-@property (strong) NSImage *wallpaper;
+@property (nonatomic, strong) NSImage *wallpaper;
+@property (strong) NSImage *renderedWallpaper;
+@property NSSize renderedSize;
+@property CGFloat renderedScale;
+@property BOOL renderingWallpaper;
+@property NSUInteger wallpaperGeneration;
+- (void)prepareWallpaperCache;
 @end
 
 @implementation LauncherWallpaperView
+
+@synthesize wallpaper = _wallpaper;
+
+- (void)setWallpaper:(NSImage *)wallpaper {
+    _wallpaper = wallpaper;
+    self.wallpaperGeneration += 1;
+    self.renderedWallpaper = nil;
+    self.renderedSize = NSZeroSize;
+    self.renderedScale = 0.0;
+    [self setNeedsDisplay:YES];
+    [self prepareWallpaperCache];
+}
+
+- (void)prepareWallpaperCache {
+    if (self.wallpaper == nil || self.renderingWallpaper || NSIsEmptyRect(self.bounds)) return;
+    NSSize targetSize = self.bounds.size;
+    NSSize sourceSize = self.wallpaper.size;
+    if (sourceSize.width <= 0.0 || sourceSize.height <= 0.0) return;
+    CGFloat targetScale = MAX(1.0, self.window.backingScaleFactor);
+    if (self.renderedWallpaper != nil
+        && NSEqualSizes(self.renderedSize, targetSize)
+        && fabs(self.renderedScale - targetScale) < 0.01) {
+        return;
+    }
+
+    NSImage *source = self.wallpaper;
+    NSUInteger generation = self.wallpaperGeneration;
+    self.renderingWallpaper = YES;
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        @autoreleasepool {
+            NSInteger pixelsWide = MAX(1, (NSInteger)ceil(targetSize.width * targetScale));
+            NSInteger pixelsHigh = MAX(1, (NSInteger)ceil(targetSize.height * targetScale));
+            NSBitmapImageRep *representation = [[NSBitmapImageRep alloc]
+                initWithBitmapDataPlanes:NULL
+                pixelsWide:pixelsWide
+                pixelsHigh:pixelsHigh
+                bitsPerSample:8
+                samplesPerPixel:4
+                hasAlpha:YES
+                isPlanar:NO
+                colorSpaceName:NSCalibratedRGBColorSpace
+                bitmapFormat:NSBitmapFormatAlphaFirst
+                bytesPerRow:0
+                bitsPerPixel:0];
+            if (representation == nil) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    weakSelf.renderingWallpaper = NO;
+                });
+                return;
+            }
+            representation.size = targetSize;
+
+            NSGraphicsContext *context = [NSGraphicsContext graphicsContextWithBitmapImageRep:representation];
+            if (context == nil) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    weakSelf.renderingWallpaper = NO;
+                });
+                return;
+            }
+            [NSGraphicsContext saveGraphicsState];
+            [NSGraphicsContext setCurrentContext:context];
+            context.imageInterpolation = NSImageInterpolationHigh;
+            NSSize imageSize = sourceSize;
+            CGFloat coverScale = MAX(targetSize.width / imageSize.width, targetSize.height / imageSize.height);
+            NSSize drawSize = NSMakeSize(imageSize.width * coverScale, imageSize.height * coverScale);
+            NSRect drawRect = NSMakeRect(
+                NSMidX(NSMakeRect(0, 0, targetSize.width, targetSize.height)) - drawSize.width / 2.0,
+                NSMidY(NSMakeRect(0, 0, targetSize.width, targetSize.height)) - drawSize.height / 2.0,
+                drawSize.width,
+                drawSize.height
+            );
+            [source drawInRect:drawRect
+                      fromRect:NSZeroRect
+                     operation:NSCompositingOperationSourceOver
+                      fraction:1.0
+                respectFlipped:YES
+                         hints:nil];
+            [context flushGraphics];
+            [NSGraphicsContext restoreGraphicsState];
+
+            NSImage *rendered = [[NSImage alloc] initWithSize:targetSize];
+            [rendered addRepresentation:representation];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                LauncherWallpaperView *strongSelf = weakSelf;
+                if (strongSelf == nil) return;
+                strongSelf.renderingWallpaper = NO;
+                if (generation != strongSelf.wallpaperGeneration
+                    || !NSEqualSizes(strongSelf.bounds.size, targetSize)
+                    || fabs(strongSelf.window.backingScaleFactor - targetScale) >= 0.01) {
+                    [strongSelf prepareWallpaperCache];
+                    return;
+                }
+                strongSelf.renderedWallpaper = rendered;
+                strongSelf.renderedSize = targetSize;
+                strongSelf.renderedScale = targetScale;
+                [strongSelf setNeedsDisplay:YES];
+            });
+        }
+    });
+}
 
 - (void)drawRect:(NSRect)dirtyRect {
     NSRect bounds = self.bounds;
@@ -56,6 +164,26 @@ static NSString *LauncherPinyinIndex(NSString *value) {
         [fallback drawInRect:bounds angle:-25.0];
         return;
     }
+
+    CGFloat backingScale = MAX(1.0, self.window.backingScaleFactor);
+    if (self.renderedWallpaper != nil
+        && NSEqualSizes(self.renderedSize, bounds.size)
+        && fabs(self.renderedScale - backingScale) < 0.01) {
+        NSGraphicsContext.currentContext.imageInterpolation = NSImageInterpolationDefault;
+        [self.renderedWallpaper drawInRect:bounds
+                                   fromRect:NSZeroRect
+                                  operation:NSCompositingOperationSourceOver
+                                   fraction:1.0
+                             respectFlipped:YES
+                                      hints:nil];
+        return;
+    }
+    if (self.renderingWallpaper) {
+        [[NSColor colorWithSRGBRed:0.08 green:0.13 blue:0.22 alpha:1.0] setFill];
+        NSRectFill(bounds);
+        return;
+    }
+    [self prepareWallpaperCache];
 
     NSSize imageSize = self.wallpaper.size;
     CGFloat scale = MAX(bounds.size.width / imageSize.width, bounds.size.height / imageSize.height);
@@ -227,6 +355,43 @@ static NSString *LauncherPinyinIndex(NSString *value) {
 
 @end
 
+@interface LauncherCenteredFlowLayout : NSCollectionViewFlowLayout
+@end
+
+@implementation LauncherCenteredFlowLayout
+
+- (NSArray<NSCollectionViewLayoutAttributes *> *)layoutAttributesForElementsInRect:(NSRect)rect {
+    NSArray<NSCollectionViewLayoutAttributes *> *attributes = [super layoutAttributesForElementsInRect:rect];
+    NSCollectionView *collectionView = self.collectionView;
+    if (collectionView == nil || attributes.count == 0 || self.itemSize.width <= 0.0) return attributes;
+
+    CGFloat availableWidth = collectionView.bounds.size.width - self.sectionInset.left - self.sectionInset.right;
+    if (availableWidth <= 0.0) return attributes;
+    CGFloat spacing = self.minimumInteritemSpacing;
+    NSInteger columns = MAX(1, (NSInteger)floor((availableWidth + spacing) / (self.itemSize.width + spacing)));
+    NSMutableDictionary<NSNumber *, NSMutableArray<NSCollectionViewLayoutAttributes *> *> *rows = [NSMutableDictionary dictionary];
+    for (NSCollectionViewLayoutAttributes *attribute in attributes) {
+        if (attribute.representedElementCategory != NSCollectionElementCategoryItem) continue;
+        NSNumber *rowKey = @(round(attribute.frame.origin.y));
+        if (rows[rowKey] == nil) rows[rowKey] = [NSMutableArray array];
+        [rows[rowKey] addObject:attribute];
+    }
+
+    for (NSArray<NSCollectionViewLayoutAttributes *> *row in rows.allValues) {
+        if ((NSInteger)row.count >= columns) continue;
+        CGFloat rowWidth = row.count * self.itemSize.width + MAX(0, row.count - 1) * spacing;
+        CGFloat shift = MAX(0.0, (availableWidth - rowWidth) / 2.0);
+        for (NSCollectionViewLayoutAttributes *attribute in row) {
+            NSRect frame = attribute.frame;
+            frame.origin.x += shift;
+            attribute.frame = frame;
+        }
+    }
+    return attributes;
+}
+
+@end
+
 static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCell";
 
 @interface LauncherSettingsCellView : NSTableCellView
@@ -300,6 +465,7 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
 @property (strong) NSArray<LauncherApplication *> *settingsApplications;
 @property (strong) NSMutableSet<NSString *> *hiddenApplicationPaths;
 @property (strong) NSMutableSet<NSString *> *hiddenApplicationBundleIdentifiers;
+@property (strong) NSMutableSet<NSString *> *loadingIconPaths;
 @property (strong) NSView *settingsBackdrop;
 @property (strong) NSVisualEffectView *settingsPanel;
 @property (strong) NSSearchField *settingsSearchField;
@@ -317,6 +483,9 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
 @property BOOL pageTransitionInProgress;
 @property BOOL isDismissing;
 @property NSUInteger launchFeedbackToken;
+@property NSUInteger discoveryGeneration;
+@property (strong) NSMetadataQuery *applicationQuery;
+@property BOOL discoveryRefreshScheduled;
 @property (strong) id keyMonitor;
 @property (strong) id scrollMonitor;
 @property (strong) id clickMonitor;
@@ -326,6 +495,13 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
 - (void)showLaunchFailureForApplication:(LauncherApplication *)application;
 - (BOOL)isApplicationHidden:(LauncherApplication *)application;
 - (void)migrateHiddenApplicationPaths;
+- (void)activateLauncherApplication;
+- (void)screenParametersDidChange:(NSNotification *)notification;
+- (void)loadIconsForApplications:(NSArray<LauncherApplication *> *)applications;
+- (NSArray<NSURL *> *)applicationSearchRoots;
+- (void)startApplicationMonitoring;
+- (void)applicationQueryDidUpdate:(NSNotification *)notification;
+- (void)scheduleApplicationRefresh;
 @end
 
 @implementation AppDelegate
@@ -335,6 +511,7 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
     self.hiddenApplicationPaths = [NSMutableSet setWithArray:savedHiddenPaths];
     NSArray<NSString *> *savedHiddenBundleIdentifiers = [NSUserDefaults.standardUserDefaults stringArrayForKey:@"HiddenApplicationBundleIdentifiers"] ?: @[];
     self.hiddenApplicationBundleIdentifiers = [NSMutableSet setWithArray:savedHiddenBundleIdentifiers];
+    self.loadingIconPaths = [NSMutableSet set];
     NSScreen *screen = NSScreen.mainScreen ?: NSScreen.screens.firstObject;
     NSRect frame = screen ? screen.frame : NSMakeRect(0, 0, 1440, 900);
     self.window = [[LauncherWindow alloc]
@@ -353,7 +530,7 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
     [self buildInterfaceForScreen:screen frame:frame];
     self.window.alphaValue = 0.0;
     [self.window makeKeyAndOrderFront:nil];
-    [NSApp activateIgnoringOtherApps:YES];
+    [self activateLauncherApplication];
     [NSApp setPresentationOptions:NSApplicationPresentationAutoHideDock | NSApplicationPresentationAutoHideMenuBar];
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
         context.duration = 0.26;
@@ -362,6 +539,12 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
     } completionHandler:nil];
     [self.window makeFirstResponder:self.searchField];
     [self installInputHandlers];
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(screenParametersDidChange:)
+               name:NSApplicationDidChangeScreenParametersNotification
+             object:nil];
+    [self startApplicationMonitoring];
     [self startDiscoveringApplications];
 }
 
@@ -369,7 +552,20 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
     LauncherWallpaperView *wallpaperView = [[LauncherWallpaperView alloc] initWithFrame:frame];
     wallpaperView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     NSURL *wallpaperURL = screen ? [NSWorkspace.sharedWorkspace desktopImageURLForScreen:screen] : nil;
-    if (wallpaperURL != nil) wallpaperView.wallpaper = [[NSImage alloc] initWithContentsOfURL:wallpaperURL];
+    if (wallpaperURL != nil) {
+        __weak LauncherWallpaperView *weakWallpaperView = wallpaperView;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            @autoreleasepool {
+                NSImage *wallpaper = [[NSImage alloc] initWithContentsOfURL:wallpaperURL];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    LauncherWallpaperView *strongWallpaperView = weakWallpaperView;
+                    if (strongWallpaperView == nil) return;
+                    strongWallpaperView.wallpaper = wallpaper;
+                    [strongWallpaperView setNeedsDisplay:YES];
+                });
+            }
+        });
+    }
     self.window.contentView = wallpaperView;
 
     NSVisualEffectView *blurView = [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
@@ -450,7 +646,7 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
     self.rows = MIN(5, MAX(3, (NSInteger)floor((frame.size.height - 210.0 + rowSpacing) / (itemHeight + rowSpacing))));
     self.itemsPerPage = self.columns * self.rows;
 
-    NSCollectionViewFlowLayout *layout = [[NSCollectionViewFlowLayout alloc] init];
+    LauncherCenteredFlowLayout *layout = [[LauncherCenteredFlowLayout alloc] init];
     layout.itemSize = NSMakeSize(itemWidth, itemHeight);
     layout.minimumInteritemSpacing = columnSpacing;
     layout.minimumLineSpacing = rowSpacing;
@@ -542,18 +738,44 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
     [NSApp unhide:nil];
     [NSApp setPresentationOptions:NSApplicationPresentationAutoHideDock | NSApplicationPresentationAutoHideMenuBar];
     [self.window makeKeyAndOrderFront:nil];
-    [NSApp activateIgnoringOtherApps:YES];
+    [self activateLauncherApplication];
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
         context.duration = 0.26;
         context.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
         self.window.animator.alphaValue = 1.0;
     } completionHandler:nil];
     [self.window makeFirstResponder:self.searchField];
+    [self startDiscoveringApplications];
 }
 
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag {
     if (!flag) [self showLauncher];
     return YES;
+}
+
+- (void)activateLauncherApplication {
+    if (@available(macOS 14.0, *)) {
+        [NSApp activate];
+    } else {
+        [NSApp activateIgnoringOtherApps:YES];
+    }
+}
+
+- (void)screenParametersDidChange:(NSNotification *)notification {
+    if (self.window == nil) return;
+    NSScreen *screen = self.window.screen ?: NSScreen.mainScreen ?: NSScreen.screens.firstObject;
+    if (screen == nil) return;
+
+    NSString *query = self.searchField.stringValue ?: @"";
+    NSRect frame = screen.frame;
+    self.pageTransitionInProgress = NO;
+    [self.window setFrame:frame display:YES animate:NO];
+    [self buildInterfaceForScreen:screen frame:frame];
+    self.searchField.stringValue = query;
+    [self applyLauncherFilter];
+    if (self.window.isVisible) {
+        [self.window makeFirstResponder:self.searchField];
+    }
 }
 
 - (void)buildSettingsOverlayInView:(NSView *)rootView frame:(NSRect)frame {
@@ -678,13 +900,26 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
 }
 
 - (void)startDiscoveringApplications {
+    self.discoveryGeneration += 1;
+    NSUInteger generation = self.discoveryGeneration;
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSArray<NSURL *> *URLs = [self applicationURLs];
         NSMutableArray<LauncherApplication *> *applications = [NSMutableArray arrayWithCapacity:URLs.count];
         for (NSURL *URL in URLs) {
+            if (generation != self.discoveryGeneration) return;
             @autoreleasepool {
                 NSBundle *bundle = [NSBundle bundleWithURL:URL];
+                NSDictionary *info = bundle.infoDictionary;
+                if (info == nil
+                    || [info[@"LSUIElement"] boolValue]
+                    || [info[@"LSBackgroundOnly"] boolValue]) {
+                    continue;
+                }
+                NSString *packageType = info[@"CFBundlePackageType"];
+                if (packageType.length > 0 && ![packageType isEqualToString:@"APPL"]) {
+                    continue;
+                }
                 NSString *displayName = [bundle objectForInfoDictionaryKey:@"CFBundleDisplayName"];
                 if (displayName.length == 0) displayName = [bundle objectForInfoDictionaryKey:@"CFBundleName"];
                 if (displayName.length == 0) displayName = URL.lastPathComponent.stringByDeletingPathExtension;
@@ -692,6 +927,7 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
                 LauncherApplication *application = [[LauncherApplication alloc] init];
                 application.URL = URL;
                 application.name = displayName;
+                application.bundleIdentifier = bundle.bundleIdentifier ?: @"";
                 NSString *pinyinIndex = LauncherPinyinIndex(displayName);
                 application.searchText = [NSString stringWithFormat:@"%@ %@", displayName, pinyinIndex].lowercaseString;
                 [applications addObject:application];
@@ -702,67 +938,97 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
         }];
         dispatch_async(dispatch_get_main_queue(), ^{
             AppDelegate *strongSelf = weakSelf;
-            if (strongSelf == nil) return;
+            if (strongSelf == nil || generation != strongSelf.discoveryGeneration) return;
             NSImage *placeholderIcon = [NSImage imageNamed:NSImageNameApplicationIcon];
             for (LauncherApplication *application in applications) {
                 application.icon = placeholderIcon;
+                application.iconLoaded = NO;
             }
+            NSInteger previousPage = strongSelf.currentPage;
             strongSelf.allApplications = applications;
+            [strongSelf migrateHiddenApplicationPaths];
             strongSelf.finishedLoading = YES;
             strongSelf.messageLabel.hidden = YES;
             strongSelf.settingsButton.enabled = YES;
-            [strongSelf applyLauncherFilter];
-        });
-
-        static const NSUInteger LauncherIconBatchSize = 24;
-        for (NSUInteger start = 0; start < applications.count; start += LauncherIconBatchSize) {
-            NSUInteger length = MIN(LauncherIconBatchSize, applications.count - start);
-            NSMutableArray<LauncherApplication *> *batchApplications = [NSMutableArray arrayWithCapacity:length];
-            NSMutableArray *batchIcons = [NSMutableArray arrayWithCapacity:length];
-            for (NSUInteger index = start; index < start + length; index++) {
-                LauncherApplication *application = applications[index];
-                NSImage *icon = [[NSWorkspace.sharedWorkspace iconForFile:application.URL.path] copy];
-                if (icon != nil) {
-                    [icon setSize:NSMakeSize(128.0, 128.0)];
-                }
-                [batchApplications addObject:application];
-                [batchIcons addObject:icon ?: (NSImage *)[NSNull null]];
+            if (!strongSelf.settingsBackdrop.hidden) {
+                [strongSelf updateSettingsSearch];
             }
+            [strongSelf applyLauncherFilter];
+            if (previousPage > 0) {
+                [strongSelf showPage:previousPage];
+            }
+        });
+    });
+}
 
-            dispatch_async(dispatch_get_main_queue(), ^{
-                AppDelegate *strongSelf = weakSelf;
-                if (strongSelf == nil) return;
-                for (NSUInteger index = 0; index < batchApplications.count; index++) {
-                    id icon = batchIcons[index];
-                    if (icon != [NSNull null]) {
-                        batchApplications[index].icon = icon;
-                    }
-                }
-                [strongSelf.collectionView reloadData];
-                [strongSelf.settingsTableView reloadData];
-            });
+- (void)loadIconsForApplications:(NSArray<LauncherApplication *> *)applications {
+    NSMutableArray<LauncherApplication *> *pendingApplications = [NSMutableArray array];
+    for (LauncherApplication *application in applications) {
+        NSString *path = application.URL.path;
+        if (application.iconLoaded || path.length == 0 || [self.loadingIconPaths containsObject:path]) continue;
+        [self.loadingIconPaths addObject:path];
+        [pendingApplications addObject:application];
+    }
+    if (pendingApplications.count == 0) return;
+
+    NSUInteger generation = self.discoveryGeneration;
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSMutableArray *icons = [NSMutableArray arrayWithCapacity:pendingApplications.count];
+        for (LauncherApplication *application in pendingApplications) {
+            NSImage *icon = [[NSWorkspace.sharedWorkspace iconForFile:application.URL.path] copy];
+            if (icon != nil) [icon setSize:NSMakeSize(128.0, 128.0)];
+            [icons addObject:icon ?: (NSImage *)[NSNull null]];
         }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            AppDelegate *strongSelf = weakSelf;
+            if (strongSelf == nil) return;
+            for (LauncherApplication *application in pendingApplications) {
+                [strongSelf.loadingIconPaths removeObject:application.URL.path];
+            }
+            if (generation != strongSelf.discoveryGeneration) {
+                [strongSelf loadIconsForApplications:strongSelf.pageApplications];
+                return;
+            }
+            for (NSUInteger index = 0; index < pendingApplications.count; index++) {
+                id icon = icons[index];
+                pendingApplications[index].iconLoaded = YES;
+                if (icon != [NSNull null]) {
+                    pendingApplications[index].icon = icon;
+                }
+            }
+            BOOL reloadCollection = NO;
+            BOOL reloadSettings = NO;
+            for (LauncherApplication *application in pendingApplications) {
+                reloadCollection |= [strongSelf.pageApplications containsObject:application];
+                reloadSettings |= !strongSelf.settingsBackdrop.hidden
+                    && [strongSelf.settingsApplications containsObject:application];
+            }
+            if (reloadCollection) [strongSelf.collectionView reloadData];
+            if (reloadSettings) [strongSelf.settingsTableView reloadData];
+        });
     });
 }
 
 - (NSArray<NSURL *> *)applicationURLs {
     NSFileManager *fileManager = NSFileManager.defaultManager;
-    NSArray<NSURL *> *roots = @[
-        [NSURL fileURLWithPath:@"/Applications" isDirectory:YES],
-        [NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:@"Applications"] isDirectory:YES],
-        [NSURL fileURLWithPath:@"/System/Applications" isDirectory:YES]
-    ];
+    NSArray<NSURL *> *roots = [self applicationSearchRoots];
     NSMutableArray<NSURL *> *foundApplications = [NSMutableArray array];
     NSMutableSet<NSString *> *seenPaths = [NSMutableSet set];
+    NSMutableSet *seenResourceIdentifiers = [NSMutableSet set];
 
     for (NSURL *root in roots) {
         BOOL isDirectory = NO;
         if (![fileManager fileExistsAtPath:root.path isDirectory:&isDirectory] || !isDirectory) continue;
         NSDirectoryEnumerator<NSURL *> *enumerator = [fileManager
             enumeratorAtURL:root
-            includingPropertiesForKeys:@[NSURLIsDirectoryKey]
+            includingPropertiesForKeys:@[NSURLIsDirectoryKey, NSURLFileResourceIdentifierKey]
             options:NSDirectoryEnumerationSkipsHiddenFiles
-            errorHandler:^BOOL(NSURL *url, NSError *error) { return YES; }];
+            errorHandler:^BOOL(NSURL *url, NSError *error) {
+                (void)url;
+                (void)error;
+                return YES;
+            }];
         for (NSURL *URL in enumerator) {
             if (![URL.pathExtension.lowercaseString isEqualToString:@"app"]) continue;
             NSNumber *isAppDirectory = nil;
@@ -772,22 +1038,61 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
 
             NSURL *standardURL = URL.standardizedURL;
             if ([seenPaths containsObject:standardURL.path]) continue;
-            if (![self isUserFacingApplicationAtURL:standardURL]) continue;
+            NSDictionary *resourceValues = [standardURL resourceValuesForKeys:@[NSURLFileResourceIdentifierKey] error:nil];
+            id resourceIdentifier = resourceValues[NSURLFileResourceIdentifierKey];
+            if (resourceIdentifier != nil && [seenResourceIdentifiers containsObject:resourceIdentifier]) continue;
             [seenPaths addObject:standardURL.path];
+            if (resourceIdentifier != nil) [seenResourceIdentifiers addObject:resourceIdentifier];
             [foundApplications addObject:standardURL];
         }
     }
     return foundApplications;
 }
 
-- (BOOL)isUserFacingApplicationAtURL:(NSURL *)URL {
-    NSURL *infoURL = [URL URLByAppendingPathComponent:@"Contents/Info.plist"];
-    NSDictionary *info = [NSDictionary dictionaryWithContentsOfURL:infoURL];
-    if (info == nil) return NO;
-    if ([info[@"LSUIElement"] boolValue] || [info[@"LSBackgroundOnly"] boolValue]) return NO;
-    NSString *packageType = info[@"CFBundlePackageType"];
-    if (packageType.length > 0 && ![packageType isEqualToString:@"APPL"]) return NO;
-    return YES;
+- (NSArray<NSURL *> *)applicationSearchRoots {
+    return @[
+        [NSURL fileURLWithPath:@"/Applications" isDirectory:YES],
+        [NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:@"Applications"] isDirectory:YES],
+        [NSURL fileURLWithPath:@"/System/Applications" isDirectory:YES]
+    ];
+}
+
+- (void)startApplicationMonitoring {
+    NSMetadataQuery *query = [[NSMetadataQuery alloc] init];
+    query.searchScopes = [self applicationSearchRoots];
+    query.predicate = [NSPredicate predicateWithFormat:@"kMDItemContentTypeTree == %@", @"com.apple.application-bundle"];
+    query.notificationBatchingInterval = 1.0;
+    self.applicationQuery = query;
+
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    [center addObserver:self
+               selector:@selector(applicationQueryDidUpdate:)
+                   name:NSMetadataQueryDidUpdateNotification
+                 object:query];
+    [query startQuery];
+}
+
+- (void)applicationQueryDidUpdate:(NSNotification *)notification {
+    [self scheduleApplicationRefresh];
+}
+
+- (void)scheduleApplicationRefresh {
+    if (![NSThread isMainThread]) {
+        __weak typeof(self) weakSelf = self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf scheduleApplicationRefresh];
+        });
+        return;
+    }
+    if (self.discoveryRefreshScheduled) return;
+    self.discoveryRefreshScheduled = YES;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.7 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        AppDelegate *strongSelf = weakSelf;
+        if (strongSelf == nil) return;
+        strongSelf.discoveryRefreshScheduled = NO;
+        [strongSelf startDiscoveringApplications];
+    });
 }
 
 - (void)openSettings:(id)sender {
@@ -809,6 +1114,7 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
 
 - (void)showAllApplications:(id)sender {
     [self.hiddenApplicationPaths removeAllObjects];
+    [self.hiddenApplicationBundleIdentifiers removeAllObjects];
     [self persistHiddenApplications];
     [self.settingsTableView reloadData];
     [self updateSettingsSummary];
@@ -816,12 +1122,19 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
 
 - (void)settingsCheckboxChanged:(NSButton *)sender {
     NSInteger row = sender.tag;
-    if (row < 0 || row >= self.settingsApplications.count) return;
+    if (row < 0 || (NSUInteger)row >= self.settingsApplications.count) return;
     LauncherApplication *application = self.settingsApplications[row];
     if (sender.state == NSControlStateValueOn) {
-        [self.hiddenApplicationPaths addObject:application.URL.path];
+        if (application.bundleIdentifier.length > 0) {
+            [self.hiddenApplicationBundleIdentifiers addObject:application.bundleIdentifier];
+        } else if (application.URL.path.length > 0) {
+            [self.hiddenApplicationPaths addObject:application.URL.path];
+        }
     } else {
         [self.hiddenApplicationPaths removeObject:application.URL.path];
+        if (application.bundleIdentifier.length > 0) {
+            [self.hiddenApplicationBundleIdentifiers removeObject:application.bundleIdentifier];
+        }
     }
     [self persistHiddenApplications];
     [self updateSettingsSummary];
@@ -829,10 +1142,46 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
 
 - (void)persistHiddenApplications {
     [NSUserDefaults.standardUserDefaults setObject:self.hiddenApplicationPaths.allObjects forKey:@"HiddenApplicationPaths"];
+    [NSUserDefaults.standardUserDefaults setObject:self.hiddenApplicationBundleIdentifiers.allObjects forKey:@"HiddenApplicationBundleIdentifiers"];
+}
+
+- (BOOL)isApplicationHidden:(LauncherApplication *)application {
+    if (application.bundleIdentifier.length > 0
+        && [self.hiddenApplicationBundleIdentifiers containsObject:application.bundleIdentifier]) {
+        return YES;
+    }
+    return application.URL.path.length > 0
+        && [self.hiddenApplicationPaths containsObject:application.URL.path];
+}
+
+- (void)migrateHiddenApplicationPaths {
+    NSMutableSet<NSString *> *existingPaths = [NSMutableSet set];
+    for (NSString *path in self.hiddenApplicationPaths.copy) {
+        if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
+            [existingPaths addObject:path];
+        }
+    }
+    self.hiddenApplicationPaths = existingPaths;
+
+    for (LauncherApplication *application in self.allApplications) {
+        if (application.bundleIdentifier.length > 0
+            && [self.hiddenApplicationPaths containsObject:application.URL.path]) {
+            [self.hiddenApplicationBundleIdentifiers addObject:application.bundleIdentifier];
+            [self.hiddenApplicationPaths removeObject:application.URL.path];
+        }
+    }
+    [self persistHiddenApplications];
 }
 
 - (void)updateSettingsSummary {
-    self.settingsSummaryLabel.stringValue = [NSString stringWithFormat:@"已屏蔽 %lu 个应用", (unsigned long)self.hiddenApplicationPaths.count];
+    NSUInteger hiddenCount = 0;
+    for (LauncherApplication *application in self.allApplications) {
+        if ([self isApplicationHidden:application]) hiddenCount += 1;
+    }
+    if (self.allApplications == nil) {
+        hiddenCount = self.hiddenApplicationPaths.count + self.hiddenApplicationBundleIdentifiers.count;
+    }
+    self.settingsSummaryLabel.stringValue = [NSString stringWithFormat:@"已屏蔽 %lu 个应用", (unsigned long)hiddenCount];
 }
 
 - (void)updateSettingsSearch {
@@ -841,6 +1190,7 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
         self.settingsApplications = self.allApplications;
     } else {
         NSPredicate *predicate = [NSPredicate predicateWithBlock:^BOOL(LauncherApplication *application, NSDictionary *bindings) {
+            (void)bindings;
             return [application.searchText containsString:query];
         }];
         self.settingsApplications = [self.allApplications filteredArrayUsingPredicate:predicate];
@@ -851,7 +1201,8 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
 - (void)applyLauncherFilter {
     NSString *query = [self.searchField.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].lowercaseString;
     NSPredicate *predicate = [NSPredicate predicateWithBlock:^BOOL(LauncherApplication *application, NSDictionary *bindings) {
-        BOOL isVisible = ![self.hiddenApplicationPaths containsObject:application.URL.path];
+        (void)bindings;
+        BOOL isVisible = ![self isApplicationHidden:application];
         BOOL matchesSearch = query.length == 0 || [application.searchText containsString:query];
         return isVisible && matchesSearch;
     }];
@@ -890,8 +1241,9 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
         cell = [[LauncherSettingsCellView alloc] initWithFrame:NSMakeRect(0, 0, tableView.bounds.size.width, 54.0)];
     }
     LauncherApplication *application = self.settingsApplications[row];
-    BOOL blocked = [self.hiddenApplicationPaths containsObject:application.URL.path];
+    BOOL blocked = [self isApplicationHidden:application];
     [cell configureWithApplication:application blocked:blocked];
+    [self loadIconsForApplications:@[application]];
     cell.blockedCheckbox.target = self;
     cell.blockedCheckbox.action = @selector(settingsCheckboxChanged:);
     cell.blockedCheckbox.tag = row;
@@ -950,17 +1302,10 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
         NSInteger length = MIN(self.itemsPerPage, count - start);
         self.pageApplications = [self.filteredApplications subarrayWithRange:NSMakeRange(start, length)];
     }
+    [self loadIconsForApplications:self.pageApplications];
     [self.collectionView reloadData];
     NSCollectionViewFlowLayout *layout = (NSCollectionViewFlowLayout *)self.collectionView.collectionViewLayout;
-    NSInteger firstRowCount = MIN(self.columns, self.pageApplications.count);
-    CGFloat occupiedWidth = firstRowCount > 0
-        ? firstRowCount * self.itemWidth + (firstRowCount - 1) * self.columnSpacing
-        : 0;
-    CGFloat gridWidth = self.columns * self.itemWidth + (self.columns - 1) * self.columnSpacing;
-    CGFloat horizontalInset = self.pageApplications.count < self.columns
-        ? MAX(0, (gridWidth - occupiedWidth) / 2.0)
-        : 0;
-    layout.sectionInset = NSEdgeInsetsMake(0, horizontalInset, 0, horizontalInset);
+    layout.sectionInset = NSEdgeInsetsZero;
     [layout invalidateLayout];
     [self.pageDots updateWithPageCount:pageCount currentPage:self.currentPage];
 
@@ -974,30 +1319,24 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
     if (!shouldAnimate) return;
 
     [self.collectionView layoutSubtreeIfNeeded];
-    [self.collectionView displayIfNeeded];
-    NSImage *incomingSnapshot = [self snapshotOfCollectionView];
-    if (incomingSnapshot == nil) {
-        [outgoingView removeFromSuperview];
-        self.pageTransitionInProgress = NO;
-        return;
-    }
 
     CGFloat travelDistance = self.collectionView.bounds.size.width + 90.0;
     NSRect restingFrame = self.collectionView.frame;
-    NSRect incomingStartFrame = restingFrame;
-    incomingStartFrame.origin.x += direction * travelDistance;
     NSRect outgoingEndFrame = restingFrame;
     outgoingEndFrame.origin.x -= direction * travelDistance;
 
-    NSImageView *incomingView = [[NSImageView alloc] initWithFrame:incomingStartFrame];
-    incomingView.image = incomingSnapshot;
-    incomingView.imageScaling = NSImageScaleAxesIndependently;
-    incomingView.alphaValue = 0.58;
-    incomingView.wantsLayer = YES;
-    [self.collectionView.superview addSubview:incomingView
-                                   positioned:NSWindowAbove
-                                   relativeTo:outgoingView];
-    self.collectionView.alphaValue = 0.0;
+    CATransform3D incomingStartTransform = CATransform3DMakeTranslation(direction * travelDistance, 0.0, 0.0);
+    CABasicAnimation *incomingAnimation = [CABasicAnimation animationWithKeyPath:@"transform"];
+    incomingAnimation.fromValue = [NSValue valueWithCATransform3D:incomingStartTransform];
+    incomingAnimation.toValue = [NSValue valueWithCATransform3D:CATransform3DIdentity];
+    incomingAnimation.duration = 0.42;
+    incomingAnimation.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.22 :0.72 :0.18 :1.0];
+    CALayer *collectionLayer = self.collectionView.layer;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    collectionLayer.transform = CATransform3DIdentity;
+    [collectionLayer addAnimation:incomingAnimation forKey:@"launcherPageSlide"];
+    [CATransaction commit];
 
     __weak typeof(self) weakSelf = self;
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
@@ -1006,13 +1345,15 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
             [CAMediaTimingFunction functionWithControlPoints:0.22 :0.72 :0.18 :1.0];
         outgoingView.animator.frame = outgoingEndFrame;
         outgoingView.animator.alphaValue = 0.18;
-        incomingView.animator.frame = restingFrame;
-        incomingView.animator.alphaValue = 1.0;
     } completionHandler:^{
         AppDelegate *strongSelf = weakSelf;
-        strongSelf.collectionView.alphaValue = 1.0;
+        if (strongSelf == nil) return;
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        [strongSelf.collectionView.layer removeAnimationForKey:@"launcherPageSlide"];
+        strongSelf.collectionView.layer.transform = CATransform3DIdentity;
+        [CATransaction commit];
         [outgoingView removeFromSuperview];
-        [incomingView removeFromSuperview];
         strongSelf.pageTransitionInProgress = NO;
     }];
 }
@@ -1037,7 +1378,7 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
 
 - (void)collectionView:(NSCollectionView *)collectionView didSelectItemsAtIndexPaths:(NSSet<NSIndexPath *> *)indexPaths {
     NSIndexPath *indexPath = indexPaths.anyObject;
-    if (indexPath == nil || indexPath.item >= self.pageApplications.count) return;
+    if (indexPath == nil || (NSUInteger)indexPath.item >= self.pageApplications.count) return;
     [self launchApplication:self.pageApplications[indexPath.item]];
 }
 
@@ -1192,6 +1533,9 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
+    [self.applicationQuery stopQuery];
+    self.applicationQuery = nil;
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
     if (self.keyMonitor != nil) [NSEvent removeMonitor:self.keyMonitor];
     if (self.scrollMonitor != nil) [NSEvent removeMonitor:self.scrollMonitor];
     if (self.clickMonitor != nil) [NSEvent removeMonitor:self.clickMonitor];
@@ -1200,6 +1544,8 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
 @end
 
 int main(int argc, const char *argv[]) {
+    (void)argc;
+    (void)argv;
     @autoreleasepool {
         NSApplication *application = NSApplication.sharedApplication;
         AppDelegate *delegate = [[AppDelegate alloc] init];
