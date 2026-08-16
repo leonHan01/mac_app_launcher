@@ -6,6 +6,10 @@ Mac Launcher is a native, macOS-style application launcher built with AppKit. It
 
 > **Pinyin search is a highlight feature:** Chinese applications can be found with full pinyin (`beiwanglu`), spaced pinyin (`bei wang lu`), or initials (`bwl`).
 
+## Screenshot
+
+![Mac Launcher application screenshot](docs/launcher-screenshot.png)
+
 ## Features
 
 - Discovers applications from `/Applications`, `~/Applications`, and `/System/Applications`.

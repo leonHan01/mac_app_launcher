@@ -6,6 +6,10 @@ Mac Launcher 是一款使用 AppKit 构建的原生 macOS 风格应用启动器�
 
 > **拼音搜索是本项目的特色功能：** 中文应用既可以使用完整拼音搜索（例如 `beiwanglu`），也可以使用带空格拼音（`bei wang lu`）或拼音首字母（`bwl`）搜索。
 
+## 应用截图
+
+![Mac Launcher 应用启动器截图](docs/launcher-screenshot.png)
+
 ## 功能
 
 - 扫描 `/Applications`、`~/Applications` 和 `/System/Applications` 中的应用。

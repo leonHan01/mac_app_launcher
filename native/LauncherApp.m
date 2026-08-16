@@ -355,43 +355,6 @@ static NSString *LauncherPinyinIndex(NSString *value) {
 
 @end
 
-@interface LauncherCenteredFlowLayout : NSCollectionViewFlowLayout
-@end
-
-@implementation LauncherCenteredFlowLayout
-
-- (NSArray<NSCollectionViewLayoutAttributes *> *)layoutAttributesForElementsInRect:(NSRect)rect {
-    NSArray<NSCollectionViewLayoutAttributes *> *attributes = [super layoutAttributesForElementsInRect:rect];
-    NSCollectionView *collectionView = self.collectionView;
-    if (collectionView == nil || attributes.count == 0 || self.itemSize.width <= 0.0) return attributes;
-
-    CGFloat availableWidth = collectionView.bounds.size.width - self.sectionInset.left - self.sectionInset.right;
-    if (availableWidth <= 0.0) return attributes;
-    CGFloat spacing = self.minimumInteritemSpacing;
-    NSInteger columns = MAX(1, (NSInteger)floor((availableWidth + spacing) / (self.itemSize.width + spacing)));
-    NSMutableDictionary<NSNumber *, NSMutableArray<NSCollectionViewLayoutAttributes *> *> *rows = [NSMutableDictionary dictionary];
-    for (NSCollectionViewLayoutAttributes *attribute in attributes) {
-        if (attribute.representedElementCategory != NSCollectionElementCategoryItem) continue;
-        NSNumber *rowKey = @(round(attribute.frame.origin.y));
-        if (rows[rowKey] == nil) rows[rowKey] = [NSMutableArray array];
-        [rows[rowKey] addObject:attribute];
-    }
-
-    for (NSArray<NSCollectionViewLayoutAttributes *> *row in rows.allValues) {
-        if ((NSInteger)row.count >= columns) continue;
-        CGFloat rowWidth = row.count * self.itemSize.width + MAX(0, row.count - 1) * spacing;
-        CGFloat shift = MAX(0.0, (availableWidth - rowWidth) / 2.0);
-        for (NSCollectionViewLayoutAttributes *attribute in row) {
-            NSRect frame = attribute.frame;
-            frame.origin.x += shift;
-            attribute.frame = frame;
-        }
-    }
-    return attributes;
-}
-
-@end
-
 static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCell";
 
 @interface LauncherSettingsCellView : NSTableCellView
@@ -646,7 +609,7 @@ static NSUserInterfaceItemIdentifier const SettingsCellIdentifier = @"SettingsCe
     self.rows = MIN(5, MAX(3, (NSInteger)floor((frame.size.height - 210.0 + rowSpacing) / (itemHeight + rowSpacing))));
     self.itemsPerPage = self.columns * self.rows;
 
-    LauncherCenteredFlowLayout *layout = [[LauncherCenteredFlowLayout alloc] init];
+    NSCollectionViewFlowLayout *layout = [[NSCollectionViewFlowLayout alloc] init];
     layout.itemSize = NSMakeSize(itemWidth, itemHeight);
     layout.minimumInteritemSpacing = columnSpacing;
     layout.minimumLineSpacing = rowSpacing;
