@@ -1,25 +1,80 @@
-# Launchpad
+# Mac Launcher
 
-一个 macOS 风格应用启动器，既可在浏览器中预览，也可构建为原生 macOS 应用。
+Mac Launcher is a native, macOS-style application launcher built with AppKit. It presents the applications installed on the local Mac in a full-screen interface, with real application icons, fast search, paging animations, and persistent visibility settings.
 
-直接用浏览器打开 `index.html`，或在本目录运行：
+## Features
 
-```bash
-python3 -m http.server 4173
-```
+- Discovers applications from `/Applications`, `~/Applications`, and `/System/Applications`.
+- Displays the real icon and display name for each local application.
+- Provides a focused, left-aligned search field with a dark translucent native-style appearance.
+- Filters applications as you type.
+- Supports paging with the mouse wheel, trackpad scrolling, page dots, and horizontal slide animations.
+- Uses fade-in and fade-out transitions when opening and dismissing the launcher.
+- Opens an application when its icon is clicked.
+- Dismisses when you click outside the application grid or press `Esc`.
+- Keeps the launcher process running after dismissal so it can be reopened from the Dock.
+- Exits completely only when you choose `Command-Q`.
+- Includes a settings panel for searching and persistently hiding selected applications.
+- Uses the custom paper-plane application icon from `native/Assets/Launched.png`.
 
-然后访问 `http://localhost:4173`。
+## Requirements
 
-macOS 版为原生 AppKit 全屏启动台，并使用纸飞机品牌图标。主搜索框使用深色半透明原生材质、细边框与柔和阴影，输入文字左对齐。启动和隐藏时使用柔和的淡入淡出效果，界面显示后在后台扫描 `/Applications`、`~/Applications` 和 `/System/Applications`。它展示本机真实图标，支持关键词搜索，并通过鼠标滚轮配合左右滑动动画翻页；点击图标会启动对应的本机应用，点击空白处或按 `Esc` 仅隐藏界面，再次点击 Dock 图标即可恢复。只有 `Command-Q` 会完全退出进程。右上角设置可选择并持久屏蔽不想显示的应用。
+- macOS 13.0 or later
+- Apple Silicon Mac
+- Xcode Command Line Tools (`clang`, `codesign`, and `hdiutil`)
 
-## 构建 DMG
+## Build the DMG
 
-在搭载 Apple Silicon 的 Mac 上运行：
+Run the build script from the project directory:
 
 ```bash
 ./build-macos.sh
 ```
 
-构建产物位于 `build/Mac-Launcher-1.5.5-arm64.dmg`。DMG 中包含应用和“Applications”快捷方式，可直接将应用拖入“应用程序”文件夹。
+The script validates the launcher lifecycle, compiles the native AppKit application, embeds the icon and bundle metadata, applies an ad-hoc signature, and creates the disk image.
 
-该项目使用本地 ad-hoc 签名，不含 Apple Developer ID 签名或公证；其他 Mac 上首次启动时可能需要在“系统设置 → 隐私与安全性”中确认打开。
+The output is:
+
+```text
+build/Mac-Launcher-1.5.5-arm64.dmg
+```
+
+Open the DMG and drag `Mac Launcher.app` to the `Applications` folder. The build is ad-hoc signed and is not notarized with an Apple Developer ID. On another Mac, macOS may ask you to approve the first launch in **System Settings → Privacy & Security**.
+
+## Run the application directly
+
+To compile the app and launch the resulting bundle:
+
+```bash
+./build-macos.sh
+open "build/Mac Launcher.app"
+```
+
+The launcher scans installed applications in the background after the window appears, so the interface remains responsive while discovery completes.
+
+## Browser preview
+
+The repository also contains a lightweight browser preview of the launcher layout. It does not have access to the Mac's installed applications or native launch services.
+
+```bash
+python3 -m http.server 4173
+```
+
+Then open <http://localhost:4173> in a browser.
+
+## Project structure
+
+```text
+native/LauncherApp.m       Native AppKit launcher implementation
+native/Info.plist          Application bundle metadata
+native/Assets/              Application icon assets
+scripts/check-lifecycle.sh Regression checks for hide/reopen/quit behavior
+build-macos.sh             Build, sign, and package script
+index.html                 Browser preview entry point
+script.js                  Browser preview behavior
+styles.css                 Browser preview styles
+```
+
+## License
+
+No license has been specified for this project yet.
